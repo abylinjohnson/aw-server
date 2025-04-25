@@ -19,6 +19,8 @@ from .api import ServerAPI
 from .custom_static import get_custom_static_blueprint
 from .log import FlaskLogHandler
 
+from .sync import init_sync
+
 logger = logging.getLogger(__name__)
 
 app_folder = os.path.dirname(os.path.abspath(__file__))
@@ -51,14 +53,23 @@ class AWFlask(Flask):
             static_url_path=static_url_path,
         )
         self.config["HOST"] = host  # needed for host-header check
-        with self.app_context():
-            _config_cors(cors_origins, testing)
 
         # Initialize datastore and API
         if storage_method is None:
             storage_method = aw_datastore.get_storage_methods()["memory"]
         db = Datastore(storage_method, testing=testing)
         self.api = ServerAPI(db=db, testing=testing)
+
+        # Configure CORS
+        if testing:
+            cors_origins.append("http://127.0.0.1:27180/*")
+        cors_origins.append("moz-extension://*")
+        if cors_origins:
+            logger.warning(
+                "Running with additional allowed CORS origins specified through config "
+                "or CLI argument (could be a security risk): {}".format(cors_origins)
+            )
+        CORS(self, resources={r"/api/*": {"origins": cors_origins}})
 
         self.register_blueprint(root)
         self.register_blueprint(rest.blueprint)
@@ -94,25 +105,6 @@ def static_js(path):
     return send_from_directory(static_folder + "/js", path)
 
 
-def _config_cors(cors_origins: List[str], testing: bool):
-    if cors_origins:
-        logger.warning(
-            "Running with additional allowed CORS origins specified through config "
-            "or CLI argument (could be a security risk): {}".format(cors_origins)
-        )
-
-    if testing:
-        # Used for development of aw-webui
-        cors_origins.append("http://127.0.0.1:27180/*")
-
-    # TODO: This could probably be more specific
-    #       See https://github.com/ActivityWatch/aw-server/pull/43#issuecomment-386888769
-    cors_origins.append("moz-extension://*")
-
-    # See: https://flask-cors.readthedocs.org/en/latest/
-    CORS(current_app, resources={r"/api/*": {"origins": cors_origins}})
-
-
 # Only to be called from aw_server.main function!
 def _start(
     storage_method,
@@ -122,6 +114,13 @@ def _start(
     cors_origins: List[str] = [],
     custom_static: Dict[str, str] = dict(),
 ):
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    logger.info("Starting AW Server...")
+    
     app = AWFlask(
         host,
         testing=testing,
@@ -129,7 +128,12 @@ def _start(
         cors_origins=cors_origins,
         custom_static=custom_static,
     )
+    
+    logger.info("Initializing sync...")
+    init_sync(app)  # Pass the whole app instead of just db
+    
     try:
+        logger.info(f"Running server at {host}:{port}")
         app.run(
             debug=testing,
             host=host,
