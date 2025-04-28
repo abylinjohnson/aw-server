@@ -13,6 +13,7 @@ from aw_datastore import Datastore
 logger = logging.getLogger(__name__)
 
 SYNC_API_URL = "https://activity-watch-server.abylinjohnson2002.workers.dev/api/sync"
+# SYNC_API_URL = "http://localhost:8787/api/sync"
 
 def get_system_info() -> Dict:
     return {
@@ -29,7 +30,10 @@ def get_events_for_sync(aw_client: ActivityWatchClient, last_sync: datetime) -> 
     for bucket_id, bucket in buckets.items():
         if bucket_id == "sync-info":  # Skip sync bucket
             continue
-        events = aw_client.get_events(bucket_id, start=last_sync)
+        if bucket['client'] == "aw-watcher-afk":
+            events = aw_client.get_events(bucket_id, start=last_sync - timedelta(hours=8), end=datetime.now(timezone.utc) + timedelta(minutes=2))
+        else:
+            events = aw_client.get_events(bucket_id, start=last_sync)
         if events:
             logger.info(f"Found {len(events)} events in bucket {bucket_id}")
             total_events += len(events)
@@ -93,17 +97,18 @@ def sync_events(app):
             events = app.api.get_events(sync_bucket_id, limit=1)
             if not events:
                 logger.info("No previous sync events found, using default start time")
-                last_sync = datetime.now(timezone.utc) - timedelta(days=1)
+                last_sync = datetime.now(timezone.utc) - timedelta(hours=6)
             else:
                 print("Events : ", events)
                 # Convert string timestamp from event data to datetime object
                 last_sync = datetime.fromisoformat(events[0]['data']['timestamp'])
         except Exception as e:
             logger.warning(f"Failed to get last sync time: {e}")
-            last_sync = datetime.now(timezone.utc) - timedelta(days=1)
+            last_sync = datetime.now(timezone.utc) - timedelta(hours=6)
             
         logger.info(f"Last sync time: {last_sync}")
     
+        logger.info(f"Started the sync process at {datetime.now(timezone.utc)}")
         # Get events since last sync
         sync_data = get_events_for_sync(aw_client, last_sync)
         
@@ -113,7 +118,10 @@ def sync_events(app):
                 json=sync_data,
                 headers={"Content-Type": "application/json"}
             )
+            # Check if the response is successful
+            logger.debug(response.status_code)
             response.raise_for_status()
+
             logger.info(f"Successfully sent sync data to {SYNC_API_URL}")
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to send sync data to API: {e}")
