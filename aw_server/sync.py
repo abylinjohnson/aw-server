@@ -8,19 +8,38 @@ from typing import Dict, List
 from aw_core.models import Event
 from aw_client import ActivityWatchClient
 from aw_datastore import Datastore
-
+import subprocess
 
 logger = logging.getLogger(__name__)
 
 SYNC_API_URL = "https://activity-watch-server.abylinjohnson2002.workers.dev/api/sync"
 # SYNC_API_URL = "http://localhost:8787/api/sync"
-
 def get_system_info() -> Dict:
-    return {
+    info = {
         "hostname": platform.node(),
         "system": platform.system(),
         "version": platform.version()
     }
+    
+    # Get serial number based on OS
+    try:
+        if platform.system() == 'Darwin':  # macOS
+            serial = subprocess.check_output(['system_profiler', 'SPHardwareDataType']).decode()
+            serial = [line.strip() for line in serial.split('\n') if 'Serial Number' in line]
+            if serial:
+                info['serial_number'] = serial[0].split(':')[1].strip()
+        elif platform.system() == 'Linux':
+            serial = subprocess.check_output(['sudo', 'dmidecode', '-s', 'system-serial-number']).decode().strip()
+            info['serial_number'] = serial
+        elif platform.system() == 'Windows':
+            serial = subprocess.check_output('wmic bios get serialnumber').decode()
+            serial = [line.strip() for line in serial.split('\n') if line.strip()][1]
+            info['serial_number'] = serial
+    except:
+        info['serial_number'] = 'Unknown'
+    
+    logger.info("System Info: " + str(info))
+    return info
 
 def get_events_for_sync(aw_client: ActivityWatchClient, last_sync: datetime) -> Dict:
     buckets = aw_client.get_buckets()
